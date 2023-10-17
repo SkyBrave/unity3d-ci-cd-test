@@ -1,13 +1,168 @@
-name: learn-github-actions
-run-name: ${{ github.actor }} is learning GitHub Actions
-on: [push]
-jobs:
-  check-bats-version:
+name: Build project
+
+on: 
+  workflow_dispatch:
+    inputs:
+      message:
+        description: 'Build Message'
+        required: true
+        default: "Build successfully finished."
+      sendNotification:
+        description: 'Check the box to send notifications to discord channel.'
+        required: true 
+        type: boolean
+        default: false
+      deployToSteam:
+        description: 'Check the box to deploy build to steam.'
+        required: true 
+        type: boolean
+        default: false
+jobs:  
+  buildForAllSupportedPlatforms:
+    name: Build for ${{ matrix.targetPlatform }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        targetPlatform:
+          - StandaloneOSX # Build a macOS standalone (Intel 64-bit).
+          - StandaloneWindows # Build a Windows standalone.
+          - StandaloneWindows64 # Build a Windows 64-bit standalone.
+          - StandaloneLinux64 # Build a Linux 64-bit standalone.
+    outputs:
+      buildVersion: ${{ steps.build.outputs.buildVersion }}
+    steps:
+      # Checkout (without LFS)
+      - name: Checkout repository
+        uses: actions/checkout@v2
+      # Git LFS
+      - name: Create LFS file list
+        run: git lfs ls-files -l | cut -d' ' -f1 | sort > .lfs-assets-id
+      - name: Restore LFS cache
+        uses: actions/cache@v2
+        id: lfs-cache
+        with:
+          path: .git/lfs
+          key: ${{ runner.os }}-lfs-${{ hashFiles('.lfs-assets-id') }}
+      - name: Git LFS Pull
+        run: |
+          git lfs pull
+          git add .
+          git reset --hard
+      # Cache
+      - uses: actions/cache@v2
+        with:
+          path: Library
+          key: Library-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-
+      # Build
+      - name: Build project
+        uses: game-ci/unity-builder@v2
+        id: build
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        with:
+          buildName: ${{ secrets.PROJECT_NAME }}
+          versioning: Semantic
+          targetPlatform: ${{ matrix.targetPlatform }}
+      - uses: actions/upload-artifact@v2
+        if: ${{ inputs.deployToSteam }} 
+        with:
+          name: Build-${{ matrix.targetPlatform }}
+          path: build/${{ matrix.targetPlatform }}
+      - name: Zip Build
+        run: |
+          cd "./build/${{ matrix.targetPlatform }}"
+          zip -r "../../${{ secrets.PROJECT_NAME }}_${{ matrix.targetPlatform }}.zip" ./*
+          cd ../../
+      - uses: adityak74/google-drive-upload-git-action@main
+        with:
+          credentials: ${{ secrets.DRIVE_CREDENTIALS }}
+          filename: "${{ secrets.PROJECT_NAME }}_${{ matrix.targetPlatform }}.zip"
+          folderId: ${{ secrets.DRIVE_FOLDER_ID }}
+          overwrite: true
+  sendNotification:
+    if: ${{ always() && inputs.sendNotification }} 
+    name: Send notification
+    needs: buildForAllSupportedPlatforms
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v3
+      - uses: technote-space/workflow-conclusion-action@v2.0.1
+      
+      - uses: satak/webrequest-action@master
+        if: ${{ env.WORKFLOW_CONCLUSION == 'success'}}
+        name: Send success notification to SkyBrave Discord channel
         with:
-          node-version: '14'
-      - run: npm install -g bats
-      - run: bats -v
+          url: ${{ secrets.DISCORD_WEBHOOK }}
+          method: 'POST'
+          payload: '{"embeds": [{"title": "${{ secrets.PROJECT_NAME }} New Build", "description" : "${{ inputs.message }}" , "color": 1631471, "url": "https://drive.google.com/drive/folders/${{ secrets.DRIVE_FOLDER_ID }}"}]}'
+      - uses: satak/webrequest-action@master
+        if: ${{ env.WORKFLOW_CONCLUSION == 'failure'}}
+        name: Send failure notification to SkyBrave Discord channel
+        with:
+          url: ${{ secrets.DISCORD_WEBHOOK }}
+          method: 'POST'
+          payload: '{"embeds": [{"title": "${{ secrets.PROJECT_NAME }} build failed", "description" : "run_id: ${{ github.run_id }} action triggered by ${{ github.actor }}" , "color": 15548997, "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}]}'
+      - uses: satak/webrequest-action@master
+        if: ${{ env.WORKFLOW_CONCLUSION == 'cancelled'}}
+        name: Send cancelled notification to SkyBrave Discord channel
+        with:
+          url: ${{ secrets.DISCORD_WEBHOOK }}
+          method: 'POST'
+          payload: '{"embeds": [{"title": "${{ secrets.PROJECT_NAME }} build cancelled", "description" : "run_id: ${{ github.run_id }} action triggered by ${{ github.actor }}" , "color": 6323595, "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}]}'
+  deployToMainDepot:
+    if: ${{ inputs.deployToSteam }} 
+    needs: [buildForAllSupportedPlatforms]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - name: Download StandaloneWindows64 Artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: Build-StandaloneWindows64
+          path: build/StandaloneWindows64
+      - name: Download StandaloneLinux64 Artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: Build-StandaloneLinux64
+          path: build/StandaloneLinux64
+      - name: Download StandaloneOSX Artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: Build-StandaloneOSX
+          path: build/StandaloneOSX
+      - name: Download StandaloneWindows Artifact 
+        uses: actions/download-artifact@v2
+        with:
+          name: Build-StandaloneWindows
+          path: build/StandaloneWindows
+      - uses: game-ci/steam-deploy@v1
+        with:
+          username: ${{ secrets.STEAM_USERNAME }}
+          password: ${{ secrets.STEAM_PASSWORD }}
+          configVdf: ${{ secrets.STEAM_CONFIG_VDF}}
+          ssfnFileName: ${{ secrets.STEAM_SSFN_FILE_NAME }}
+          ssfnFileContents: ${{ secrets.STEAM_SSFN_FILE_CONTENTS }}
+          appId: ${{ secrets.STEAM_APP_ID }}
+          buildDescription: v${{ needs.buildForAllSupportedPlatforms.outputs.buildVersion }}
+          rootPath: build
+          firstDepotIdOverride: ${{ secrets.STEAM_DEPOT_ID }}
+          depot1Path: StandaloneWindows
+          depot2Path: StandaloneWindows64
+          depot3Path: StandaloneOSX
+          depot4Path: StandaloneLinux64
+          releaseBranch: ${{secrets.STEAM_DEPLOYMENT_BRANC}}
+  clearArtifacts:
+    if: always()
+    needs: [deployToMainDepot]
+    runs-on: ubuntu-latest
+    steps:
+      - name : Delete Artifacts 
+        uses : geekyeggo/delete-artifact@v2
+        with:
+            name: |
+              Build-*
