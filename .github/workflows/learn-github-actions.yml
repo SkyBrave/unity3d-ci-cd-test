@@ -17,6 +17,11 @@ on:
         required: true 
         type: boolean
         default: false
+      uploadToDrive:
+        description: 'Set it true to upload build to drive default is false.'
+        required: true 
+        type: boolean
+        default: false
 jobs:  
   buildForAllSupportedPlatforms:
     name: Build for ${{ matrix.targetPlatform }}
@@ -70,13 +75,13 @@ jobs:
         if: ${{ inputs.deployToSteam }} 
         with:
           name: Build-${{ matrix.targetPlatform }}
-          path: build/${{ matrix.targetPlatform }}
+          path: "build/${{ matrix.targetPlatform }}"
       - name: Zip Build
         run: |
-          cd "./build/${{ matrix.targetPlatform }}"
-          zip -r "../../${{ secrets.PROJECT_NAME }}_${{ matrix.targetPlatform }}.zip" ./*
-          cd ../../
-      - uses: adityak74/google-drive-upload-git-action@main
+          zip -r -j "${{ secrets.PROJECT_NAME }}_${{ matrix.targetPlatform }}" . -i "build/${{ matrix.targetPlatform }}/"
+      - if: ${{ inputs.uploadToDrive }}
+        name: upload to drive
+        uses: adityak74/google-drive-upload-git-action@main
         with:
           credentials: ${{ secrets.DRIVE_CREDENTIALS }}
           filename: "${{ secrets.PROJECT_NAME }}_${{ matrix.targetPlatform }}.zip"
@@ -155,7 +160,7 @@ jobs:
           depot2Path: StandaloneWindows64
           depot3Path: StandaloneOSX
           depot4Path: StandaloneLinux64
-          releaseBranch: ${{secrets.STEAM_DEPLOYMENT_BRANC}}
+          releaseBranch: ${{secrets.STEAM_DEPLOYMENT_BRANCH}}
   clearArtifacts:
     if: always()
     needs: [deployToMainDepot]
