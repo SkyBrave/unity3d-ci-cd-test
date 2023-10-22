@@ -78,7 +78,7 @@ jobs:
           path: "build/${{ matrix.targetPlatform }}"
       - name: Zip Build
         run: |
-          zip -r -j "${{ secrets.PROJECT_NAME }}_${{ matrix.targetPlatform }}" . -i "build/${{ matrix.targetPlatform }}/"
+          zip -r "${{ secrets.PROJECT_NAME }}_${{ matrix.targetPlatform }}" "build/${{ matrix.targetPlatform }}/"
       - if: ${{ inputs.uploadToDrive }}
         name: upload to drive
         uses: adityak74/google-drive-upload-git-action@main
